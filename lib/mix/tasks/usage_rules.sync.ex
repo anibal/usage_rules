@@ -36,6 +36,7 @@ defmodule Mix.Tasks.UsageRules.Sync.Docs do
     * `--link-to-folder <folder>` - Save usage rules for each package in separate files within the specified folder and create links to them
     * `--link-style <style>` - Style of links to create when using --link-to-folder (markdown|at). Defaults to 'markdown'
     * `--inline <specs>` - Force specific packages to be inlined even when using --link-to-folder. Supports same specs as packages (comma-separated)
+    * `--except <specs>` - Exclude specific packages when using --all. Supports same specs as packages (comma-separated)
 
     ## Examples
 
@@ -124,6 +125,26 @@ defmodule Mix.Tasks.UsageRules.Sync.Docs do
     mix usage_rules.sync CLAUDE.md ash phoenix --remove-missing
     ```
 
+    Exclude specific packages when using --all:
+    ```sh
+    mix usage_rules.sync CLAUDE.md --all --except ash,phoenix
+    ```
+
+    Exclude specific sub-rules when using --all:
+    ```sh
+    mix usage_rules.sync CLAUDE.md --all --except ash:testing,phoenix:views
+    ```
+
+    Exclude all sub-rules from a package when using --all:
+    ```sh
+    mix usage_rules.sync CLAUDE.md --all --except usage_rules:all
+    ```
+
+    Combine --except with other options:
+    ```sh
+    mix usage_rules.sync CLAUDE.md --all --except phoenix --link-to-folder deps --inline usage_rules:all
+    ```
+
     """
   end
 end
@@ -154,7 +175,8 @@ if Code.ensure_loaded?(Igniter) do
           remove_missing: :boolean,
           link_to_folder: :string,
           link_style: :string,
-          inline: :string
+          inline: :string,
+          except: :string
         ]
       }
     end
@@ -199,6 +221,7 @@ if Code.ensure_loaded?(Igniter) do
       link_to_folder = igniter.args.options[:link_to_folder]
       link_style = igniter.args.options[:link_style] || "markdown"
       inline_specs = parse_inline_specs(igniter.args.options[:inline])
+      except_specs = parse_except_specs(igniter.args.options[:except])
       provided_packages = igniter.args.positional.packages
 
       cond do
@@ -209,6 +232,14 @@ if Code.ensure_loaded?(Igniter) do
         # If --link-style is used without --link-to-folder, add error
         igniter.args.options[:link_style] && !link_to_folder ->
           Igniter.add_issue(igniter, "--link-style can only be used with --link-to-folder")
+
+        # If --except is used with --list or --remove, add error
+        igniter.args.options[:except] && (list_option || remove_option) ->
+          Igniter.add_issue(igniter, "Cannot use --except with --list or --remove options")
+
+        # If --except is used without --all, add error
+        igniter.args.options[:except] && !all_option ->
+          Igniter.add_issue(igniter, "--except can only be used with --all option")
 
         # If --remove is used with --all or --list, add error
         remove_option && (all_option || list_option) ->
@@ -259,6 +290,7 @@ if Code.ensure_loaded?(Igniter) do
             link_to_folder,
             link_style,
             inline_specs,
+            except_specs,
             remove_missing_option
           )
 
@@ -406,6 +438,15 @@ if Code.ensure_loaded?(Igniter) do
       |> Enum.reject(&(&1 == ""))
     end
 
+    defp parse_except_specs(nil), do: []
+
+    defp parse_except_specs(except_string) do
+      except_string
+      |> String.split(",")
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+    end
+
     defp should_inline_package?(package_name, sub_rule, inline_specs) do
       package_name_str = to_string(package_name)
 
@@ -430,6 +471,39 @@ if Code.ensure_loaded?(Igniter) do
             true
 
           # Special case: "usage_rules:all" means inline all sub-rules
+          ["usage_rules", "all"] when sub_rule != nil ->
+            true
+
+          _ ->
+            false
+        end
+      end)
+    end
+
+    defp should_exclude_package?(package_name, sub_rule, except_specs) do
+      package_name_str = to_string(package_name)
+
+      section_name =
+        case sub_rule do
+          nil -> package_name_str
+          sub_rule_name -> "#{package_name_str}:#{sub_rule_name}"
+        end
+
+      Enum.any?(except_specs, fn except_spec ->
+        case String.split(except_spec, ":", parts: 2) do
+          [^package_name_str] when sub_rule == nil ->
+            true
+
+          [^package_name_str, "all"] ->
+            true
+
+          [^package_name_str, sub_rule_spec] when sub_rule == sub_rule_spec ->
+            true
+
+          [^section_name] ->
+            true
+
+          # Special case: "usage_rules:all" means exclude all sub-rules
           ["usage_rules", "all"] when sub_rule != nil ->
             true
 
@@ -499,6 +573,7 @@ if Code.ensure_loaded?(Igniter) do
            link_to_folder,
            link_style,
            inline_specs,
+           except_specs,
            remove_missing
          ) do
       all_packages_with_rules = get_packages_with_usage_rules(igniter, all_deps)
@@ -523,6 +598,10 @@ if Code.ensure_loaded?(Igniter) do
             end)
 
           main_rules ++ sub_rules
+        end)
+        # Filter out excluded packages
+        |> Enum.reject(fn {package_name, _package_path, sub_rule} ->
+          should_exclude_package?(package_name, sub_rule, except_specs)
         end)
 
       igniter

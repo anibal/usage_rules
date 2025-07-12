@@ -1138,6 +1138,135 @@ defmodule Mix.Tasks.UsageRules.SyncTest do
       |> assert_content_equals("docs/ash.md", "Main Ash rules")
       |> assert_content_equals("docs/phoenix.md", "Phoenix rules")
     end
+
+    test "inline multiple packages using comma-separated values" do
+      test_project(
+        files: %{
+          "deps/ash/usage-rules.md" => "Main Ash rules",
+          "deps/ash/usage-rules/testing.md" => "Ash testing rules",
+          "deps/phoenix/usage-rules.md" => "Phoenix rules",
+          "deps/ecto/usage-rules.md" => "Ecto rules"
+        }
+      )
+      |> Igniter.compose_task("usage_rules.sync", [
+        "rules.md",
+        "ash",
+        "ash:testing",
+        "phoenix",
+        "ecto",
+        "--inline",
+        "ash,phoenix",
+        "--link-to-folder",
+        "docs"
+      ])
+      |> assert_creates("rules.md")
+      |> assert_creates("docs/ash_testing.md")
+      |> assert_creates("docs/ecto.md")
+      # Should not create files for inlined packages
+      |> refute_creates("docs/ash.md")
+      |> refute_creates("docs/phoenix.md")
+    end
+
+    test "inline multiple sub-rules using comma-separated values" do
+      test_project(
+        files: %{
+          "deps/ash/usage-rules.md" => "Main Ash rules",
+          "deps/ash/usage-rules/testing.md" => "Ash testing rules",
+          "deps/ash/usage-rules/deployment.md" => "Ash deployment rules",
+          "deps/phoenix/usage-rules.md" => "Phoenix rules",
+          "deps/phoenix/usage-rules/views.md" => "Phoenix views rules"
+        }
+      )
+      |> Igniter.compose_task("usage_rules.sync", [
+        "rules.md",
+        "--all",
+        "--inline",
+        "ash:testing,phoenix:views",
+        "--link-to-folder",
+        "docs"
+      ])
+      |> assert_creates("rules.md")
+      |> assert_creates("docs/ash.md")
+      |> assert_creates("docs/ash_deployment.md")
+      |> assert_creates("docs/phoenix.md")
+      # Should not create files for inlined sub-rules
+      |> refute_creates("docs/ash_testing.md")
+      |> refute_creates("docs/phoenix_views.md")
+    end
+
+    test "inline mixed main and sub-rules using comma-separated values" do
+      test_project(
+        files: %{
+          "deps/ash/usage-rules.md" => "Main Ash rules",
+          "deps/ash/usage-rules/testing.md" => "Ash testing rules",
+          "deps/phoenix/usage-rules.md" => "Phoenix rules",
+          "deps/phoenix/usage-rules/views.md" => "Phoenix views rules"
+        }
+      )
+      |> Igniter.compose_task("usage_rules.sync", [
+        "rules.md",
+        "--all",
+        "--inline",
+        "ash,phoenix:views",
+        "--link-to-folder",
+        "docs"
+      ])
+      |> assert_creates("rules.md")
+      |> assert_creates("docs/ash_testing.md")
+      |> assert_creates("docs/phoenix.md")
+      # Should not create files for inlined items
+      |> refute_creates("docs/ash.md")
+      |> refute_creates("docs/phoenix_views.md")
+    end
+
+    test "inline with wildcard :all in comma-separated list" do
+      test_project(
+        files: %{
+          "deps/ash/usage-rules.md" => "Main Ash rules",
+          "deps/ash/usage-rules/testing.md" => "Ash testing rules",
+          "deps/phoenix/usage-rules.md" => "Phoenix rules",
+          "deps/phoenix/usage-rules/views.md" => "Phoenix views rules"
+        }
+      )
+      |> Igniter.compose_task("usage_rules.sync", [
+        "rules.md",
+        "--all",
+        "--inline",
+        "ash:all,phoenix",
+        "--link-to-folder",
+        "docs"
+      ])
+      |> assert_creates("rules.md")
+      # Should not create any files for ash (main or sub-rules) or phoenix main
+      |> refute_creates("docs/ash.md")
+      |> refute_creates("docs/ash_testing.md")
+      |> refute_creates("docs/phoenix.md")
+      # Should create file for phoenix sub-rule not inlined
+      |> assert_creates("docs/phoenix_views.md")
+    end
+
+    test "handles spaces in comma-separated inline list" do
+      test_project(
+        files: %{
+          "deps/ash/usage-rules.md" => "Main Ash rules",
+          "deps/phoenix/usage-rules.md" => "Phoenix rules",
+          "deps/ecto/usage-rules.md" => "Ecto rules"
+        }
+      )
+      |> Igniter.compose_task("usage_rules.sync", [
+        "rules.md",
+        "--all",
+        "--inline",
+        "ash, phoenix , ecto",
+        "--link-to-folder",
+        "docs"
+      ])
+      |> assert_creates("rules.md")
+      # Should not create any files since all are inlined
+      |> refute_creates("docs/ash.md")
+      |> refute_creates("docs/phoenix.md")
+      |> refute_creates("docs/ecto.md")
+    end
   end
 
   describe "--remove-missing option" do
@@ -1341,6 +1470,124 @@ defmodule Mix.Tasks.UsageRules.SyncTest do
       case apply_igniter(igniter) do
         {:error, [error_message]} ->
           assert String.contains?(error_message, "Cannot use --remove-missing with --list option")
+
+        result ->
+          flunk("Expected error, got: #{inspect(result)}")
+      end
+    end
+  end
+
+  describe "--except option" do
+    test "excludes specified packages when using --all" do
+      test_project(
+        files: %{
+          "deps/ash/usage-rules.md" => "Ash framework rules",
+          "deps/phoenix/usage-rules.md" => "Phoenix web framework rules",
+          "deps/ecto/usage-rules.md" => "Ecto database rules"
+        }
+      )
+      |> Igniter.compose_task("usage_rules.sync", ["rules.md", "--all", "--except", "ash,phoenix"])
+      |> assert_has_notice("Found 3 dependencies with usage rules")
+      |> assert_has_notice("Including usage rules for: ecto")
+      |> assert_creates("rules.md")
+    end
+
+    test "excludes specific sub-rules when using --all" do
+      test_project(
+        files: %{
+          "deps/ash/usage-rules.md" => "Main Ash rules",
+          "deps/ash/usage-rules/testing.md" => "Ash testing rules",
+          "deps/ash/usage-rules/deployment.md" => "Ash deployment rules",
+          "deps/phoenix/usage-rules.md" => "Phoenix rules",
+          "deps/phoenix/usage-rules/views.md" => "Phoenix views rules"
+        }
+      )
+      |> Igniter.compose_task("usage_rules.sync", ["rules.md", "--all", "--except", "ash:testing,phoenix:views"])
+      |> assert_has_notice("Including usage rules for: ash")
+      |> assert_has_notice("Including usage rules for: ash:deployment")
+      |> assert_has_notice("Including usage rules for: phoenix")
+      |> assert_creates("rules.md")
+    end
+
+    test "excludes mixed main and sub-rules using --except" do
+      test_project(
+        files: %{
+          "deps/ash/usage-rules.md" => "Main Ash rules",
+          "deps/ash/usage-rules/testing.md" => "Ash testing rules",
+          "deps/phoenix/usage-rules.md" => "Phoenix rules",
+          "deps/phoenix/usage-rules/views.md" => "Phoenix views rules"
+        }
+      )
+      |> Igniter.compose_task("usage_rules.sync", ["rules.md", "--all", "--except", "ash,phoenix:views"])
+      |> assert_has_notice("Including usage rules for: ash:testing")
+      |> assert_has_notice("Including usage rules for: phoenix")
+      |> assert_creates("rules.md")
+    end
+
+    test "excludes all sub-rules with wildcard :all" do
+      test_project(
+        files: %{
+          "deps/ash/usage-rules.md" => "Main Ash rules",
+          "deps/ash/usage-rules/testing.md" => "Ash testing rules",
+          "deps/phoenix/usage-rules.md" => "Phoenix rules",
+          "deps/phoenix/usage-rules/views.md" => "Phoenix views rules"
+        }
+      )
+      |> Igniter.compose_task("usage_rules.sync", ["rules.md", "--all", "--except", "ash:all"])
+      |> assert_has_notice("Including usage rules for: phoenix")
+      |> assert_has_notice("Including usage rules for: phoenix:views")
+      |> assert_creates("rules.md")
+    end
+
+    test "handles spaces in comma-separated except list" do
+      test_project(
+        files: %{
+          "deps/ash/usage-rules.md" => "Main Ash rules",
+          "deps/phoenix/usage-rules.md" => "Phoenix rules",
+          "deps/ecto/usage-rules.md" => "Ecto rules"
+        }
+      )
+      |> Igniter.compose_task("usage_rules.sync", ["rules.md", "--all", "--except", "ash, phoenix , ecto"])
+      |> assert_has_notice("Found 3 dependencies with usage rules")
+      |> assert_creates("rules.md")
+    end
+
+    test "requires --all option when using --except" do
+      igniter =
+        test_project()
+        |> Igniter.compose_task("usage_rules.sync", ["rules.md", "ash", "--except", "phoenix"])
+
+      case apply_igniter(igniter) do
+        {:error, [error_message]} ->
+          assert String.contains?(error_message, "--except can only be used with --all option")
+
+        result ->
+          flunk("Expected error, got: #{inspect(result)}")
+      end
+    end
+
+    test "cannot use --except with --list option" do
+      igniter =
+        test_project()
+        |> Igniter.compose_task("usage_rules.sync", ["--list", "--except", "ash"])
+
+      case apply_igniter(igniter) do
+        {:error, [error_message]} ->
+          assert String.contains?(error_message, "Cannot use --except with --list or --remove options")
+
+        result ->
+          flunk("Expected error, got: #{inspect(result)}")
+      end
+    end
+
+    test "cannot use --except with --remove option" do
+      igniter =
+        test_project()
+        |> Igniter.compose_task("usage_rules.sync", ["rules.md", "ash", "--remove", "--except", "phoenix"])
+
+      case apply_igniter(igniter) do
+        {:error, [error_message]} ->
+          assert String.contains?(error_message, "Cannot use --except with --list or --remove options")
 
         result ->
           flunk("Expected error, got: #{inspect(result)}")
